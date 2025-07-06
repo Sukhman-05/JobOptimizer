@@ -97,25 +97,6 @@ An intelligent resume optimization tool that learns your writing style from cove
 - Easy to copy and paste
 - Good for further editing
 
-## Deployment
-
-### Vercel Deployment (Recommended)
-
-1. **Push to GitHub:**
-   ```bash
-   git add .
-   git commit -m "Ready for deployment"
-   git push origin main
-   ```
-
-2. **Deploy to Vercel:**
-   - Go to [vercel.com](https://vercel.com)
-   - Click "New Project"
-   - Import your GitHub repository
-   - Add environment variable: `OPENAI_API_KEY`
-   - Deploy!
-
-3. **Your app will be live at:** `https://your-project-name.vercel.app`
 
 ## Technical Details
 
