@@ -111,6 +111,7 @@ def init_database():
                 user_id INTEGER REFERENCES users(id),
                 content TEXT,
                 filename VARCHAR(255),
+                file_path VARCHAR(500),
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """,
@@ -128,6 +129,7 @@ def init_database():
                 user_id INTEGER REFERENCES users(id) UNIQUE,
                 content TEXT,
                 filename VARCHAR(255),
+                file_path VARCHAR(500),
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -160,6 +162,7 @@ def init_database():
                 user_id INTEGER,
                 content TEXT,
                 filename TEXT,
+                file_path TEXT,
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
@@ -179,6 +182,7 @@ def init_database():
                 user_id INTEGER UNIQUE,
                 content TEXT,
                 filename TEXT,
+                file_path TEXT,
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )

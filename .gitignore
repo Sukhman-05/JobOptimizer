@@ -9,3 +9,21 @@ wheels/
 # Virtual environments
 .venv
 .env
+
+# Database files
+*.db
+*.sqlite
+
+# Uploaded files
+uploads/
+
+# Logs
+*.log
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

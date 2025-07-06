@@ -1,10 +1,14 @@
-from flask import Flask, render_template, request, jsonify, send_file, session, redirect, url_for, flash
+from flask import Flask, render_template, request, jsonify, send_file, session, redirect, url_for, flash, make_response
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from flask_wtf.csrf import CSRFProtect
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import PyPDF2
 import io
 import os
 import json
 import re
+import logging
 from openai import OpenAI
 from dotenv import load_dotenv
 from pathlib import Path
@@ -13,6 +17,7 @@ import tempfile
 import tomllib
 import base64
 import uuid
+import hashlib
 from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
@@ -20,14 +25,62 @@ from database import execute_query, execute_query_with_return, execute_query_sin
 
 load_dotenv()
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
-app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-change-this')
+
+# Security Configuration
+SECRET_KEY = os.getenv('SECRET_KEY')
+if not SECRET_KEY:
+    logger.error("SECRET_KEY environment variable is not set!")
+    raise ValueError("SECRET_KEY environment variable must be set for security")
+
+app.secret_key = SECRET_KEY
+
+# CSRF Protection
+csrf = CSRFProtect(app)
+
+# Rate Limiting
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"]
+)
+
+# File Upload Configuration
+UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'pdf', 'txt'}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
+# Ensure upload directory exists
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def validate_file_size(file):
+    file.seek(0, 2)  # Seek to end
+    size = file.tell()
+    file.seek(0)  # Reset to beginning
+    return size <= MAX_FILE_SIZE
 
 # Flask-Login setup
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 login_manager.login_message = 'Please log in to access this page.'
+
+# Security Headers
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com;"
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    return response
 
 # User class for Flask-Login
 class User(UserMixin):
@@ -49,24 +102,53 @@ def init_db():
 # Initialize database
 try:
     init_db()
-    print("✅ Database initialized successfully")
+    logger.info("✅ Database initialized successfully")
 except Exception as e:
-    print(f"⚠️ Database initialization warning: {e}")
+    logger.error(f"⚠️ Database initialization warning: {e}")
 
 # Load API key from environment variable only
 def get_openai_api_key():
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        print("Warning: OPENAI_API_KEY environment variable not set")
+        logger.warning("Warning: OPENAI_API_KEY environment variable not set")
         return None
     return api_key
 
 OPENAI_API_KEY = get_openai_api_key()
 
+# Input validation functions
+def validate_email(email):
+    """Validate email format"""
+    if not email or '@' not in email or '.' not in email:
+        return False
+    return True
+
+def validate_password(password):
+    """Validate password strength"""
+    if not password or len(password) < 6:
+        return False
+    return True
+
+def sanitize_filename(filename):
+    """Sanitize filename for security"""
+    if not filename:
+        return None
+    # Remove any path components and sanitize
+    filename = os.path.basename(filename)
+    # Only allow alphanumeric, dots, hyphens, and underscores
+    filename = re.sub(r'[^a-zA-Z0-9._-]', '', filename)
+    return filename
+
 # Authentication functions
 def register_user(email, password):
-    """Register a new user"""
+    """Register a new user with validation"""
     try:
+        if not validate_email(email):
+            return None, "Invalid email format"
+        
+        if not validate_password(password):
+            return None, "Password must be at least 6 characters long"
+        
         password_hash = generate_password_hash(password)
         user_id = execute_query_with_return(
             'INSERT INTO users (email, password_hash) VALUES (%s, %s)',
@@ -74,12 +156,16 @@ def register_user(email, password):
         )
         return user_id, None
     except Exception as e:
+        logger.error(f"Registration error: {e}")
         if "unique" in str(e).lower() or "duplicate" in str(e).lower():
             return None, "Email already registered"
-        return None, str(e)
+        return None, "Registration failed"
 
 def authenticate_user(email, password):
-    """Authenticate a user"""
+    """Authenticate a user with validation"""
+    if not validate_email(email):
+        return None
+    
     user_data = execute_query_single('SELECT id, email, password_hash FROM users WHERE email = %s', (email,))
     
     if user_data and check_password_hash(user_data[2], password):
@@ -88,12 +174,64 @@ def authenticate_user(email, password):
         return User(user_data[0], user_data[1])
     return None
 
+# File storage functions
+def save_file_to_storage(file, user_id, file_type):
+    """Save file to storage and return file path"""
+    if not file or not file.filename:
+        raise ValueError("No file provided")
+    
+    if not allowed_file(file.filename):
+        raise ValueError("File type not allowed")
+    
+    if not validate_file_size(file):
+        raise ValueError("File too large (max 10MB)")
+    
+    # Create user-specific directory
+    user_dir = os.path.join(UPLOAD_FOLDER, str(user_id))
+    os.makedirs(user_dir, exist_ok=True)
+    
+    # Generate unique filename
+    filename = sanitize_filename(file.filename)
+    if not filename:
+        filename = f"file_{uuid.uuid4().hex}"
+    
+    # Add timestamp to prevent conflicts
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    name, ext = os.path.splitext(filename)
+    safe_filename = f"{name}_{timestamp}{ext}"
+    
+    file_path = os.path.join(user_dir, safe_filename)
+    
+    # Save file
+    file.save(file_path)
+    
+    return file_path, safe_filename
+
+def extract_text_from_file(file_path):
+    """Extract text from file based on type"""
+    try:
+        if file_path.lower().endswith('.pdf'):
+            with open(file_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                text = ""
+                for page in pdf_reader.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + "\n"
+                return text
+        else:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                return file.read()
+    except Exception as e:
+        logger.error(f"Error extracting text from file: {e}")
+        raise ValueError(f"Error reading file: {str(e)}")
+
 # Data management functions
-def save_cover_letter(user_id, content, filename):
+def save_cover_letter(user_id, content, filename, file_path=None):
     """Save cover letter to database"""
     execute_query(
-        'INSERT INTO cover_letters (user_id, content, filename) VALUES (%s, %s, %s)',
-        (user_id, content, filename)
+        'INSERT INTO cover_letters (user_id, content, filename, file_path) VALUES (%s, %s, %s, %s)',
+        (user_id, content, filename, file_path)
     )
 
 def get_user_cover_letters(user_id):
@@ -105,12 +243,11 @@ def get_user_cover_letters(user_id):
 
 def save_writing_analysis(user_id, analysis):
     """Save writing style analysis to database"""
-    # Use UPSERT for PostgreSQL or INSERT OR REPLACE for SQLite
+    # First try to delete existing record, then insert new one
+    execute_query('DELETE FROM writing_analysis WHERE user_id = %s', (user_id,))
     execute_query('''
         INSERT INTO writing_analysis (user_id, analysis, updated_at)
         VALUES (%s, %s, CURRENT_TIMESTAMP)
-        ON CONFLICT (user_id) DO UPDATE SET 
-        analysis = EXCLUDED.analysis, updated_at = CURRENT_TIMESTAMP
     ''', (user_id, analysis))
 
 def get_writing_analysis(user_id):
@@ -121,14 +258,14 @@ def get_writing_analysis(user_id):
     )
     return result[0] if result else None
 
-def save_master_resume(user_id, content, filename):
+def save_master_resume(user_id, content, filename, file_path=None):
     """Save master resume to database"""
+    # First try to delete existing record, then insert new one
+    execute_query('DELETE FROM master_resume WHERE user_id = %s', (user_id,))
     execute_query('''
-        INSERT INTO master_resume (user_id, content, filename)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (user_id) DO UPDATE SET 
-        content = EXCLUDED.content, filename = EXCLUDED.filename, uploaded_at = CURRENT_TIMESTAMP
-    ''', (user_id, content, filename))
+        INSERT INTO master_resume (user_id, content, filename, file_path)
+        VALUES (%s, %s, %s, %s)
+    ''', (user_id, content, filename, file_path))
 
 def get_master_resume(user_id):
     """Get master resume for a user"""
@@ -137,18 +274,6 @@ def get_master_resume(user_id):
         (user_id,)
     )
     return result[0] if result else None
-
-def extract_text_from_pdf(pdf_file):
-    try:
-        pdf_reader = PyPDF2.PdfReader(pdf_file)
-        text = ""
-        for page in pdf_reader.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text + "\n"
-        return text
-    except Exception as e:
-        return f"Error reading PDF: {str(e)}"
 
 def analyze_writing_style(cover_letters):
     """Analyze writing style from cover letters"""
@@ -305,10 +430,15 @@ def index():
     return render_template('index.html')
 
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit("5 per minute")
 def login():
     if request.method == 'POST':
-        email = request.form.get('email')
-        password = request.form.get('password')
+        email = request.form.get('email', '').strip()
+        password = request.form.get('password', '')
+        
+        if not email or not password:
+            flash('Please provide both email and password', 'error')
+            return render_template('login.html')
         
         user = authenticate_user(email, password)
         if user:
@@ -320,11 +450,12 @@ def login():
     return render_template('login.html')
 
 @app.route('/signup', methods=['GET', 'POST'])
+@limiter.limit("3 per minute")
 def signup():
     if request.method == 'POST':
-        email = request.form.get('email')
-        password = request.form.get('password')
-        confirm_password = request.form.get('confirm_password')
+        email = request.form.get('email', '').strip()
+        password = request.form.get('password', '')
+        confirm_password = request.form.get('confirm_password', '')
         
         if password != confirm_password:
             flash('Passwords do not match', 'error')
@@ -352,160 +483,248 @@ def logout():
 # API Routes
 @app.route('/api/upload-cover-letters', methods=['POST'])
 @login_required
+@limiter.limit("10 per minute")
 def upload_cover_letters_api():
-    if 'files' not in request.files:
-        return jsonify({'error': 'No files provided'}), 400
-    
-    files = request.files.getlist('files')
-    if not files or files[0].filename == '':
-        return jsonify({'error': 'No files selected'}), 400
-    
-    uploaded_count = 0
-    for file in files:
-        if file and file.filename:
-            try:
-                if file.filename and file.filename.lower().endswith('.pdf'):
-                    content = extract_text_from_pdf(file)
-                else:
-                    content = file.read().decode('utf-8')
-                
-                save_cover_letter(current_user.id, content, secure_filename(file.filename or 'unknown'))
-                uploaded_count += 1
-            except Exception as e:
-                return jsonify({'error': f'Error processing {file.filename or "unknown"}: {str(e)}'}), 500
-    
-    return jsonify({'message': f'Successfully uploaded {uploaded_count} cover letter(s)'})
+    try:
+        if 'files' not in request.files:
+            return jsonify({'error': 'No files provided'}), 400
+        
+        files = request.files.getlist('files')
+        if not files or files[0].filename == '':
+            return jsonify({'error': 'No files selected'}), 400
+        
+        uploaded_count = 0
+        errors = []
+        
+        for file in files:
+            if file and file.filename:
+                try:
+                    # Validate file
+                    if not allowed_file(file.filename):
+                        errors.append(f"Invalid file type for {file.filename}")
+                        continue
+                    
+                    if not validate_file_size(file):
+                        errors.append(f"File too large for {file.filename}")
+                        continue
+                    
+                    # Save file to storage
+                    file_path, safe_filename = save_file_to_storage(file, current_user.id, 'cover_letter')
+                    
+                    # Extract text from file
+                    content = extract_text_from_file(file_path)
+                    
+                    # Save to database
+                    save_cover_letter(current_user.id, content, safe_filename, file_path)
+                    uploaded_count += 1
+                    
+                except Exception as e:
+                    logger.error(f"Error processing file {file.filename}: {e}")
+                    errors.append(f"Error processing {file.filename}: {str(e)}")
+        
+        response = {'message': f'Successfully uploaded {uploaded_count} cover letter(s)'}
+        if errors:
+            response['warnings'] = errors
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        logger.error(f"Upload error: {e}")
+        return jsonify({'error': 'Upload failed'}), 500
 
 @app.route('/api/get-cover-letters', methods=['GET'])
 @login_required
 def get_cover_letters_api():
-    cover_letters = get_user_cover_letters(current_user.id)
-    return jsonify({'cover_letters': cover_letters})
+    try:
+        cover_letters = get_user_cover_letters(current_user.id)
+        return jsonify({'cover_letters': cover_letters})
+    except Exception as e:
+        logger.error(f"Error getting cover letters: {e}")
+        return jsonify({'error': 'Failed to retrieve cover letters'}), 500
 
 @app.route('/api/analyze-writing-style', methods=['POST'])
 @login_required
+@limiter.limit("5 per minute")
 def analyze_writing_style_api():
-    cover_letters = get_user_cover_letters(current_user.id)
-    
-    if not cover_letters:
-        return jsonify({'error': 'No cover letters found. Please upload some cover letters first.'}), 400
-    
     try:
+        cover_letters = get_user_cover_letters(current_user.id)
+        
+        if not cover_letters:
+            return jsonify({'error': 'No cover letters found. Please upload some cover letters first.'}), 400
+        
         analysis = analyze_writing_style(cover_letters)
         save_writing_analysis(current_user.id, analysis)
         return jsonify({'analysis': analysis})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Analysis error: {e}")
+        return jsonify({'error': 'Analysis failed'}), 500
 
 @app.route('/api/get-writing-analysis', methods=['GET'])
 @login_required
 def get_writing_analysis_api():
-    analysis = get_writing_analysis(current_user.id)
-    return jsonify({'analysis': analysis})
+    try:
+        analysis = get_writing_analysis(current_user.id)
+        return jsonify({'analysis': analysis})
+    except Exception as e:
+        logger.error(f"Error getting writing analysis: {e}")
+        return jsonify({'error': 'Failed to retrieve analysis'}), 500
 
 @app.route('/api/upload-master-resume', methods=['POST'])
 @login_required
+@limiter.limit("5 per minute")
 def upload_master_resume_api():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file provided'}), 400
-    
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
-    
     try:
-        if file.filename and file.filename.lower().endswith('.pdf'):
-            content = extract_text_from_pdf(file)
-        else:
-            content = file.read().decode('utf-8')
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
         
-        save_master_resume(current_user.id, content, secure_filename(file.filename or 'unknown'))
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        # Validate file
+        if not allowed_file(file.filename):
+            return jsonify({'error': 'Invalid file type. Only PDF and TXT files are allowed.'}), 400
+        
+        if not validate_file_size(file):
+            return jsonify({'error': 'File too large. Maximum size is 10MB.'}), 400
+        
+        # Save file to storage
+        file_path, safe_filename = save_file_to_storage(file, current_user.id, 'resume')
+        
+        # Extract text from file
+        content = extract_text_from_file(file_path)
+        
+        # Save to database
+        save_master_resume(current_user.id, content, safe_filename, file_path)
+        
         return jsonify({'message': 'Master resume uploaded successfully'})
     except Exception as e:
+        logger.error(f"Resume upload error: {e}")
         return jsonify({'error': f'Error processing file: {str(e)}'}), 500
 
 @app.route('/api/get-master-resume', methods=['GET'])
 @login_required
 def get_master_resume_api():
-    master_resume = get_master_resume(current_user.id)
-    return jsonify({'master_resume': master_resume})
+    try:
+        master_resume = get_master_resume(current_user.id)
+        return jsonify({'master_resume': master_resume})
+    except Exception as e:
+        logger.error(f"Error getting master resume: {e}")
+        return jsonify({'error': 'Failed to retrieve master resume'}), 500
 
 @app.route('/api/generate-resume', methods=['POST'])
 @login_required
+@limiter.limit("10 per minute")
 def generate_resume_api():
-    data = request.get_json()
-    job_description = data.get('job_description', '')
-    output_format = data.get('output_format', 'text')
-    
-    if not job_description:
-        return jsonify({'error': 'Job description is required'}), 400
-    
-    master_resume = get_master_resume(current_user.id)
-    if not master_resume:
-        return jsonify({'error': 'Please upload a master resume first'}), 400
-    
-    writing_style = get_writing_analysis(current_user.id)
-    if not writing_style:
-        return jsonify({'error': 'Please analyze your writing style first'}), 400
-    
     try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Invalid request data'}), 400
+        
+        job_description = data.get('job_description', '').strip()
+        output_format = data.get('output_format', 'text')
+        
+        if not job_description:
+            return jsonify({'error': 'Job description is required'}), 400
+        
+        master_resume = get_master_resume(current_user.id)
+        if not master_resume:
+            return jsonify({'error': 'Please upload a master resume first'}), 400
+        
+        writing_style = get_writing_analysis(current_user.id)
+        if not writing_style:
+            return jsonify({'error': 'Please analyze your writing style first'}), 400
+        
         resume = generate_optimized_resume(master_resume, job_description, writing_style, output_format)
         return jsonify({'resume': resume})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Resume generation error: {e}")
+        return jsonify({'error': 'Resume generation failed'}), 500
 
 @app.route('/api/generate-cover-letter', methods=['POST'])
 @login_required
+@limiter.limit("10 per minute")
 def generate_cover_letter_api():
-    data = request.get_json()
-    job_description = data.get('job_description', '')
-    company_name = data.get('company_name', '')
-    job_title = data.get('job_title', '')
-    
-    if not job_description:
-        return jsonify({'error': 'Job description is required'}), 400
-    
-    master_resume = get_master_resume(current_user.id)
-    if not master_resume:
-        return jsonify({'error': 'Please upload a master resume first'}), 400
-    
-    writing_style = get_writing_analysis(current_user.id)
-    if not writing_style:
-        return jsonify({'error': 'Please analyze your writing style first'}), 400
-    
     try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Invalid request data'}), 400
+        
+        job_description = data.get('job_description', '').strip()
+        company_name = data.get('company_name', '').strip()
+        job_title = data.get('job_title', '').strip()
+        
+        if not job_description:
+            return jsonify({'error': 'Job description is required'}), 400
+        
+        master_resume = get_master_resume(current_user.id)
+        if not master_resume:
+            return jsonify({'error': 'Please upload a master resume first'}), 400
+        
+        writing_style = get_writing_analysis(current_user.id)
+        if not writing_style:
+            return jsonify({'error': 'Please analyze your writing style first'}), 400
+        
         cover_letter = generate_cover_letter(master_resume, job_description, writing_style, company_name, job_title)
         return jsonify({'cover_letter': cover_letter})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Cover letter generation error: {e}")
+        return jsonify({'error': 'Cover letter generation failed'}), 500
 
 @app.route('/api/extract-text', methods=['POST'])
 @login_required
+@limiter.limit("10 per minute")
 def extract_text_api():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file provided'}), 400
-    
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
-    
     try:
-        if file.filename and file.filename.lower().endswith('.pdf'):
-            content = extract_text_from_pdf(file)
-        else:
-            content = file.read().decode('utf-8')
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        # Validate file
+        if not allowed_file(file.filename):
+            return jsonify({'error': 'Invalid file type. Only PDF and TXT files are allowed.'}), 400
+        
+        if not validate_file_size(file):
+            return jsonify({'error': 'File too large. Maximum size is 10MB.'}), 400
+        
+        # Save file temporarily
+        file_path, safe_filename = save_file_to_storage(file, current_user.id, 'temp')
+        
+        # Extract text
+        content = extract_text_from_file(file_path)
+        
+        # Clean up temporary file
+        try:
+            os.remove(file_path)
+        except:
+            pass
         
         return jsonify({'text': content})
     except Exception as e:
+        logger.error(f"Text extraction error: {e}")
         return jsonify({'error': f'Error extracting text: {str(e)}'}), 500
 
 @app.errorhandler(500)
 def internal_error(error):
+    logger.error(f"Internal server error: {error}")
     return jsonify({'error': 'Internal server error'}), 500
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    return jsonify({'error': str(e)}), 500
+    logger.error(f"Unhandled exception: {e}")
+    return jsonify({'error': 'An unexpected error occurred'}), 500
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
 
 if __name__ == '__main__':
-    app.run(debug=True) 
+    # Environment-based configuration
+    debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
+    host = os.getenv('FLASK_HOST', '0.0.0.0')
+    port = int(os.getenv('FLASK_PORT', 5000))
+    
+    app.run(debug=debug_mode, host=host, port=port) 
