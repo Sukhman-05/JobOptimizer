@@ -13,10 +13,10 @@ import tempfile
 import tomllib
 import base64
 import uuid
-import sqlite3
 from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
+from database import execute_query, execute_query_with_return, execute_query_single, init_database
 
 load_dotenv()
 
@@ -37,81 +37,14 @@ class User(UserMixin):
 
 @login_manager.user_loader
 def load_user(user_id):
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, email FROM users WHERE id = ?', (user_id,))
-    user_data = cursor.fetchone()
-    conn.close()
-    
+    user_data = execute_query_single('SELECT id, email FROM users WHERE id = %s', (user_id,))
     if user_data:
         return User(user_data[0], user_data[1])
     return None
 
-# Database setup
+# Database setup - now handled by database.py
 def init_db():
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    
-    # Create users table with authentication
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_login TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # Create user_sessions table for session management
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            session_id TEXT UNIQUE NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            expires_at TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        )
-    ''')
-    
-    # Create cover_letters table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS cover_letters (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            content TEXT,
-            filename TEXT,
-            uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        )
-    ''')
-    
-    # Create writing_analysis table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS writing_analysis (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            analysis TEXT,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        )
-    ''')
-    
-    # Create master_resume table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS master_resume (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            content TEXT,
-            filename TEXT,
-            uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+    init_database()
 
 # Initialize database
 try:
@@ -133,100 +66,76 @@ OPENAI_API_KEY = get_openai_api_key()
 # Authentication functions
 def register_user(email, password):
     """Register a new user"""
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    
     try:
         password_hash = generate_password_hash(password)
-        cursor.execute('INSERT INTO users (email, password_hash) VALUES (?, ?)', (email, password_hash))
-        conn.commit()
-        user_id = cursor.lastrowid
-        conn.close()
+        user_id = execute_query_with_return(
+            'INSERT INTO users (email, password_hash) VALUES (%s, %s)',
+            (email, password_hash)
+        )
         return user_id, None
-    except sqlite3.IntegrityError:
-        conn.close()
-        return None, "Email already registered"
     except Exception as e:
-        conn.close()
+        if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+            return None, "Email already registered"
         return None, str(e)
 
 def authenticate_user(email, password):
     """Authenticate a user"""
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, email, password_hash FROM users WHERE email = ?', (email,))
-    user_data = cursor.fetchone()
-    conn.close()
+    user_data = execute_query_single('SELECT id, email, password_hash FROM users WHERE email = %s', (email,))
     
     if user_data and check_password_hash(user_data[2], password):
         # Update last login
-        conn = sqlite3.connect('users.db')
-        cursor = conn.cursor()
-        cursor.execute('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?', (user_data[0],))
-        conn.commit()
-        conn.close()
+        execute_query('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = %s', (user_data[0],))
         return User(user_data[0], user_data[1])
     return None
 
 # Data management functions
 def save_cover_letter(user_id, content, filename):
     """Save cover letter to database"""
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO cover_letters (user_id, content, filename)
-        VALUES (?, ?, ?)
-    ''', (user_id, content, filename))
-    conn.commit()
-    conn.close()
+    execute_query(
+        'INSERT INTO cover_letters (user_id, content, filename) VALUES (%s, %s, %s)',
+        (user_id, content, filename)
+    )
 
 def get_user_cover_letters(user_id):
     """Get all cover letters for a user"""
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT content FROM cover_letters WHERE user_id = ?', (user_id,))
-    results = cursor.fetchall()
-    conn.close()
-    return [row[0] for row in results]
+    results = execute_query('SELECT content FROM cover_letters WHERE user_id = %s', (user_id,))
+    if results:
+        return [row[0] for row in results]
+    return []
 
 def save_writing_analysis(user_id, analysis):
     """Save writing style analysis to database"""
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT OR REPLACE INTO writing_analysis (user_id, analysis, updated_at)
-        VALUES (?, ?, CURRENT_TIMESTAMP)
+    # Use UPSERT for PostgreSQL or INSERT OR REPLACE for SQLite
+    execute_query('''
+        INSERT INTO writing_analysis (user_id, analysis, updated_at)
+        VALUES (%s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id) DO UPDATE SET 
+        analysis = EXCLUDED.analysis, updated_at = CURRENT_TIMESTAMP
     ''', (user_id, analysis))
-    conn.commit()
-    conn.close()
 
 def get_writing_analysis(user_id):
     """Get writing style analysis for a user"""
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT analysis FROM writing_analysis WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1', (user_id,))
-    result = cursor.fetchone()
-    conn.close()
+    result = execute_query_single(
+        'SELECT analysis FROM writing_analysis WHERE user_id = %s ORDER BY updated_at DESC LIMIT 1',
+        (user_id,)
+    )
     return result[0] if result else None
 
 def save_master_resume(user_id, content, filename):
     """Save master resume to database"""
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT OR REPLACE INTO master_resume (user_id, content, filename)
-        VALUES (?, ?, ?)
+    execute_query('''
+        INSERT INTO master_resume (user_id, content, filename)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (user_id) DO UPDATE SET 
+        content = EXCLUDED.content, filename = EXCLUDED.filename, uploaded_at = CURRENT_TIMESTAMP
     ''', (user_id, content, filename))
-    conn.commit()
-    conn.close()
 
 def get_master_resume(user_id):
     """Get master resume for a user"""
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT content FROM master_resume WHERE user_id = ? ORDER BY uploaded_at DESC LIMIT 1', (user_id,))
-    result = cursor.fetchone()
-    conn.close()
+    result = execute_query_single(
+        'SELECT content FROM master_resume WHERE user_id = %s ORDER BY uploaded_at DESC LIMIT 1',
+        (user_id,)
+    )
     return result[0] if result else None
 
 def extract_text_from_pdf(pdf_file):
