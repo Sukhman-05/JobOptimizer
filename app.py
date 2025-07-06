@@ -1,4 +1,5 @@
-from flask import Flask, render_template, request, jsonify, send_file, session
+from flask import Flask, render_template, request, jsonify, send_file, session, redirect, url_for, flash
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 import PyPDF2
 import io
 import os
@@ -13,52 +14,102 @@ import tomllib
 import base64
 import uuid
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
+from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-change-this')
 
+# Flask-Login setup
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'
+login_manager.login_message = 'Please log in to access this page.'
+
+# User class for Flask-Login
+class User(UserMixin):
+    def __init__(self, id, email):
+        self.id = id
+        self.email = email
+
+@login_manager.user_loader
+def load_user(user_id):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, email FROM users WHERE id = ?', (user_id,))
+    user_data = cursor.fetchone()
+    conn.close()
+    
+    if user_data:
+        return User(user_data[0], user_data[1])
+    return None
+
 # Database setup
 def init_db():
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
+    
+    # Create users table with authentication
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
-            user_id TEXT PRIMARY KEY,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_login TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    
+    # Create user_sessions table for session management
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            session_id TEXT UNIQUE NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+    
+    # Create cover_letters table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS cover_letters (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT,
+            user_id INTEGER,
             content TEXT,
             filename TEXT,
             uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (user_id)
+            FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
+    
+    # Create writing_analysis table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS writing_analysis (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT,
+            user_id INTEGER,
             analysis TEXT,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (user_id)
+            FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
+    
+    # Create master_resume table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS master_resume (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT,
+            user_id INTEGER,
             content TEXT,
             filename TEXT,
             uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (user_id)
+            FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
+    
     conn.commit()
     conn.close()
 
@@ -68,7 +119,6 @@ try:
     print("✅ Database initialized successfully")
 except Exception as e:
     print(f"⚠️ Database initialization warning: {e}")
-    # Continue anyway - database will be created when needed
 
 # Load API key from environment variable only
 def get_openai_api_key():
@@ -80,18 +130,45 @@ def get_openai_api_key():
 
 OPENAI_API_KEY = get_openai_api_key()
 
-def get_or_create_user():
-    """Get or create a user session"""
-    if 'user_id' not in session:
-        session['user_id'] = str(uuid.uuid4())
-        # Create user in database
+# Authentication functions
+def register_user(email, password):
+    """Register a new user"""
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    
+    try:
+        password_hash = generate_password_hash(password)
+        cursor.execute('INSERT INTO users (email, password_hash) VALUES (?, ?)', (email, password_hash))
+        conn.commit()
+        user_id = cursor.lastrowid
+        conn.close()
+        return user_id, None
+    except sqlite3.IntegrityError:
+        conn.close()
+        return None, "Email already registered"
+    except Exception as e:
+        conn.close()
+        return None, str(e)
+
+def authenticate_user(email, password):
+    """Authenticate a user"""
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, email, password_hash FROM users WHERE email = ?', (email,))
+    user_data = cursor.fetchone()
+    conn.close()
+    
+    if user_data and check_password_hash(user_data[2], password):
+        # Update last login
         conn = sqlite3.connect('users.db')
         cursor = conn.cursor()
-        cursor.execute('INSERT OR IGNORE INTO users (user_id) VALUES (?)', (session['user_id'],))
+        cursor.execute('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?', (user_data[0],))
         conn.commit()
         conn.close()
-    return session['user_id']
+        return User(user_data[0], user_data[1])
+    return None
 
+# Data management functions
 def save_cover_letter(user_id, content, filename):
     """Save cover letter to database"""
     conn = sqlite3.connect('users.db')
@@ -248,20 +325,15 @@ def generate_optimized_resume(master_resume_content, job_description, writing_st
     Target Job Description:
     {job_description}
 
-    Writing Style Analysis:
+    User's Writing Style Analysis:
     {writing_style}
 
-    CRITICAL INSTRUCTIONS:
-    - Use ONLY the information from the master resume content above
-    - DO NOT invent, fabricate, or add any information not present in the master resume
-    - Edit and reorganize the existing content to match the job requirements
-    - Keep relevant experiences and skills, remove or minimize irrelevant ones
-    - Maintain all factual information from the master resume
-    - Focus on achievements and skills that match the job description
-    - Use action verbs and quantifiable results from the original content
-    - Include keywords from the job description
-    - Keep it concise and impactful (1 page maximum)
-    - Prioritize experiences that directly relate to the target role"""
+    Generate an optimized resume that:
+    1. Uses ONLY information from the master resume
+    2. Matches the user's writing style and tone
+    3. Optimizes for the specific job description
+    4. Maintains all factual information
+    5. Focuses on relevant achievements and skills"""
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -272,39 +344,38 @@ def generate_optimized_resume(master_resume_content, job_description, writing_st
         temperature=0.3,
         max_tokens=2000
     )
+    
     return response.choices[0].message.content
 
 def generate_cover_letter(master_resume_content, job_description, writing_style, company_name="", job_title=""):
-    """Generate cover letter based on master resume, job description, and writing style"""
+    """Generate a cover letter based on the user's writing style and resume"""
     
     if not OPENAI_API_KEY:
         return "Error: OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
     
     client = OpenAI(api_key=OPENAI_API_KEY)
     
-    prompt = f"""Create a compelling cover letter based on the following:
+    prompt = f"""Create a compelling cover letter for this job application:
 
-    Master Resume Content (Your Complete Resume):
+    User's Resume Content:
     {master_resume_content}
 
-    Job Description:
+    Target Job Description:
     {job_description}
 
-    Writing Style Analysis:
+    User's Writing Style Analysis:
     {writing_style}
 
-    Company: {company_name}
+    Company Name: {company_name}
     Job Title: {job_title}
 
-    CRITICAL INSTRUCTIONS:
-    - Use ONLY the information from the master resume content above
-    - DO NOT invent, fabricate, or add any information not present in the master resume
-    - Match the user's writing style and tone
-    - Focus on relevant achievements and skills from the master resume
-    - Address the specific job requirements
-    - Keep it concise and impactful (1 page maximum)
-    - Professional and engaging tone
-    - Include specific examples from the master resume that match the job requirements"""
+    Generate a cover letter that:
+    1. Matches the user's writing style and tone
+    2. Highlights relevant experience from their resume
+    3. Addresses the specific job requirements
+    4. Shows enthusiasm for the role
+    5. Maintains consistency with their writing personality
+    6. Is professional and compelling"""
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -312,204 +383,220 @@ def generate_cover_letter(master_resume_content, job_description, writing_style,
             {"role": "system", "content": "You are an expert cover letter writer. Create compelling, personalized cover letters that match the user's writing style."},
             {"role": "user", "content": prompt}
         ],
-        temperature=0.3,
+        temperature=0.4,
         max_tokens=1500
     )
+    
     return response.choices[0].message.content
 
+# Routes
 @app.route('/')
+@login_required
 def index():
-    try:
-        user_id = get_or_create_user()
-        return render_template('index.html', user_id=user_id)
-    except Exception as e:
-        print(f"Error in index route: {e}")
-        return "Server error. Please check logs.", 500
+    return render_template('index.html')
 
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        email = request.form.get('email')
+        password = request.form.get('password')
+        
+        user = authenticate_user(email, password)
+        if user:
+            login_user(user)
+            return redirect(url_for('index'))
+        else:
+            flash('Invalid email or password', 'error')
+    
+    return render_template('login.html')
+
+@app.route('/signup', methods=['GET', 'POST'])
+def signup():
+    if request.method == 'POST':
+        email = request.form.get('email')
+        password = request.form.get('password')
+        confirm_password = request.form.get('confirm_password')
+        
+        if password != confirm_password:
+            flash('Passwords do not match', 'error')
+            return render_template('signup.html')
+        
+        if not password or len(password) < 6:
+            flash('Password must be at least 6 characters long', 'error')
+            return render_template('signup.html')
+        
+        user_id, error = register_user(email, password)
+        if user_id:
+            flash('Account created successfully! Please log in.', 'success')
+            return redirect(url_for('login'))
+        else:
+            flash(str(error) if error else 'Registration failed', 'error')
+    
+    return render_template('signup.html')
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('login'))
+
+# API Routes
 @app.route('/api/upload-cover-letters', methods=['POST'])
+@login_required
 def upload_cover_letters_api():
-    try:
-        user_id = get_or_create_user()
-        
-        if 'files' not in request.files:
-            return jsonify({'error': 'No files provided'}), 400
-        
-        files = request.files.getlist('files')
-        uploaded_files = []
-        
-        for file in files:
-            if file.filename == '':
-                continue
+    if 'files' not in request.files:
+        return jsonify({'error': 'No files provided'}), 400
+    
+    files = request.files.getlist('files')
+    if not files or files[0].filename == '':
+        return jsonify({'error': 'No files selected'}), 400
+    
+    uploaded_count = 0
+    for file in files:
+        if file and file.filename:
+            try:
+                if file.filename and file.filename.lower().endswith('.pdf'):
+                    content = extract_text_from_pdf(file)
+                else:
+                    content = file.read().decode('utf-8')
                 
-            if file.content_type == "application/pdf":
-                content = extract_text_from_pdf(io.BytesIO(file.read()))
-            else:
-                content = file.read().decode("utf-8")
-            
-            if content:
-                save_cover_letter(user_id, content, file.filename)
-                uploaded_files.append(file.filename)
-        
-        return jsonify({
-            'message': f'Successfully uploaded {len(uploaded_files)} cover letter(s)',
-            'files': uploaded_files
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+                save_cover_letter(current_user.id, content, secure_filename(file.filename or 'unknown'))
+                uploaded_count += 1
+            except Exception as e:
+                return jsonify({'error': f'Error processing {file.filename or "unknown"}: {str(e)}'}), 500
+    
+    return jsonify({'message': f'Successfully uploaded {uploaded_count} cover letter(s)'})
 
 @app.route('/api/get-cover-letters', methods=['GET'])
+@login_required
 def get_cover_letters_api():
-    try:
-        user_id = get_or_create_user()
-        cover_letters = get_user_cover_letters(user_id)
-        return jsonify({'cover_letters': cover_letters})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    cover_letters = get_user_cover_letters(current_user.id)
+    return jsonify({'cover_letters': cover_letters})
 
 @app.route('/api/analyze-writing-style', methods=['POST'])
+@login_required
 def analyze_writing_style_api():
+    cover_letters = get_user_cover_letters(current_user.id)
+    
+    if not cover_letters:
+        return jsonify({'error': 'No cover letters found. Please upload some cover letters first.'}), 400
+    
     try:
-        user_id = get_or_create_user()
-        cover_letters = get_user_cover_letters(user_id)
-        
-        if not cover_letters:
-            return jsonify({'error': 'No cover letters found. Please upload cover letters first.'}), 400
-        
         analysis = analyze_writing_style(cover_letters)
-        save_writing_analysis(user_id, analysis)
-        
+        save_writing_analysis(current_user.id, analysis)
         return jsonify({'analysis': analysis})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/get-writing-analysis', methods=['GET'])
+@login_required
 def get_writing_analysis_api():
-    try:
-        user_id = get_or_create_user()
-        analysis = get_writing_analysis(user_id)
-        return jsonify({'analysis': analysis})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    analysis = get_writing_analysis(current_user.id)
+    return jsonify({'analysis': analysis})
 
 @app.route('/api/upload-master-resume', methods=['POST'])
+@login_required
 def upload_master_resume_api():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
     try:
-        user_id = get_or_create_user()
-        
-        if 'file' not in request.files:
-            return jsonify({'error': 'No file provided'}), 400
-        
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'error': 'No file selected'}), 400
-        
-        if file.content_type == "application/pdf":
-            content = extract_text_from_pdf(io.BytesIO(file.read()))
+        if file.filename and file.filename.lower().endswith('.pdf'):
+            content = extract_text_from_pdf(file)
         else:
-            content = file.read().decode("utf-8")
+            content = file.read().decode('utf-8')
         
-        if content:
-            save_master_resume(user_id, content, file.filename)
-            return jsonify({
-                'message': f'Master resume uploaded successfully: {file.filename}',
-                'filename': file.filename
-            })
-        else:
-            return jsonify({'error': 'Could not extract content from file'}), 400
-            
+        save_master_resume(current_user.id, content, secure_filename(file.filename or 'unknown'))
+        return jsonify({'message': 'Master resume uploaded successfully'})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': f'Error processing file: {str(e)}'}), 500
 
 @app.route('/api/get-master-resume', methods=['GET'])
+@login_required
 def get_master_resume_api():
-    try:
-        user_id = get_or_create_user()
-        master_resume = get_master_resume(user_id)
-        return jsonify({'master_resume': master_resume})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    master_resume = get_master_resume(current_user.id)
+    return jsonify({'master_resume': master_resume})
 
 @app.route('/api/generate-resume', methods=['POST'])
+@login_required
 def generate_resume_api():
+    data = request.get_json()
+    job_description = data.get('job_description', '')
+    output_format = data.get('output_format', 'text')
+    
+    if not job_description:
+        return jsonify({'error': 'Job description is required'}), 400
+    
+    master_resume = get_master_resume(current_user.id)
+    if not master_resume:
+        return jsonify({'error': 'Please upload a master resume first'}), 400
+    
+    writing_style = get_writing_analysis(current_user.id)
+    if not writing_style:
+        return jsonify({'error': 'Please analyze your writing style first'}), 400
+    
     try:
-        user_id = get_or_create_user()
-        data = request.get_json()
-        job_description = data.get('job_description', '')
-        output_format = data.get('output_format', 'text')
-        
-        if not job_description:
-            return jsonify({'error': 'Job description is required'}), 400
-        
-        # Get stored master resume
-        master_resume = get_master_resume(user_id)
-        if not master_resume:
-            return jsonify({'error': 'No master resume found. Please upload your master resume first.'}), 400
-        
-        # Get stored writing style analysis
-        writing_style = get_writing_analysis(user_id) or "No writing style analysis available."
-        
-        optimized_resume = generate_optimized_resume(master_resume, job_description, writing_style, output_format)
-        return jsonify({'resume': optimized_resume})
+        resume = generate_optimized_resume(master_resume, job_description, writing_style, output_format)
+        return jsonify({'resume': resume})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/generate-cover-letter', methods=['POST'])
+@login_required
 def generate_cover_letter_api():
+    data = request.get_json()
+    job_description = data.get('job_description', '')
+    company_name = data.get('company_name', '')
+    job_title = data.get('job_title', '')
+    
+    if not job_description:
+        return jsonify({'error': 'Job description is required'}), 400
+    
+    master_resume = get_master_resume(current_user.id)
+    if not master_resume:
+        return jsonify({'error': 'Please upload a master resume first'}), 400
+    
+    writing_style = get_writing_analysis(current_user.id)
+    if not writing_style:
+        return jsonify({'error': 'Please analyze your writing style first'}), 400
+    
     try:
-        user_id = get_or_create_user()
-        data = request.get_json()
-        job_description = data.get('job_description', '')
-        company_name = data.get('company_name', '')
-        job_title = data.get('job_title', '')
-        
-        if not job_description:
-            return jsonify({'error': 'Job description is required'}), 400
-        
-        # Get stored master resume
-        master_resume = get_master_resume(user_id)
-        if not master_resume:
-            return jsonify({'error': 'No master resume found. Please upload your master resume first.'}), 400
-        
-        # Get stored writing style analysis
-        writing_style = get_writing_analysis(user_id) or "No writing style analysis available."
-        
         cover_letter = generate_cover_letter(master_resume, job_description, writing_style, company_name, job_title)
         return jsonify({'cover_letter': cover_letter})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/extract-text', methods=['POST'])
+@login_required
 def extract_text_api():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
     try:
-        if 'file' not in request.files:
-            return jsonify({'error': 'No file provided'}), 400
-        
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'error': 'No file selected'}), 400
-        
-        if file.content_type == "application/pdf":
-            text = extract_text_from_pdf(io.BytesIO(file.read()))
+        if file.filename and file.filename.lower().endswith('.pdf'):
+            content = extract_text_from_pdf(file)
         else:
-            text = file.read().decode("utf-8")
+            content = file.read().decode('utf-8')
         
-        return jsonify({'text': text})
+        return jsonify({'text': content})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': f'Error extracting text: {str(e)}'}), 500
 
-if __name__ == '__main__':
-    app.run(debug=True)
-
-# For Vercel deployment
-app.debug = True
-
-# Add error logging for Vercel
 @app.errorhandler(500)
 def internal_error(error):
-    print(f"500 Error: {error}")
-    return "Internal server error", 500
+    return jsonify({'error': 'Internal server error'}), 500
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    print(f"Unhandled exception: {e}")
-    return "Internal server error", 500 
+    return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True) 

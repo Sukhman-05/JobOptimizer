@@ -93,16 +93,29 @@
     <div class="container-fluid">
         <div class="main-container p-4">
             <div class="text-center mb-4">
-                <h1 class="display-4 fw-bold text-primary">
-                    <i class="fas fa-file-alt me-3"></i>AI Resume Optimizer
-                </h1>
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div></div>
+                    <h1 class="display-4 fw-bold text-primary mb-0">
+                        <i class="fas fa-file-alt me-3"></i>AI Resume Optimizer
+                    </h1>
+                    <div class="dropdown">
+                        <button class="btn btn-outline-primary dropdown-toggle" type="button" id="userMenu" data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="fas fa-user me-2"></i>{{ current_user.email }}
+                        </button>
+                        <ul class="dropdown-menu" aria-labelledby="userMenu">
+                            <li><a class="dropdown-item" href="{{ url_for('logout') }}">
+                                <i class="fas fa-sign-out-alt me-2"></i>Logout
+                            </a></li>
+                        </ul>
+                    </div>
+                </div>
                 <p class="lead text-muted">Upload your resume, job description, and cover letters to generate optimized resumes and cover letters</p>
             </div>
 
-            <!-- User Session Info -->
+            <!-- User Account Info -->
             <div class="user-info">
-                <h5><i class="fas fa-user me-2"></i>Your Session</h5>
-                <p class="mb-0">Your data is automatically saved and will persist across sessions. No need to re-upload cover letters!</p>
+                <h5><i class="fas fa-user me-2"></i>Your Account</h5>
+                <p class="mb-0">Your data is securely stored and accessible across all devices. No need to re-upload cover letters!</p>
             </div>
 
             <!-- Stored Data Status -->
