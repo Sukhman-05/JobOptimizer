@@ -235,14 +235,26 @@
             try {
                 // Load cover letters
                 const coverLettersResponse = await fetch('/api/get-cover-letters');
+                if (!coverLettersResponse.ok) {
+                    console.log('No cover letters found (new user)');
+                    return;
+                }
                 const coverLettersData = await coverLettersResponse.json();
                 
                 // Load writing analysis
                 const analysisResponse = await fetch('/api/get-writing-analysis');
+                if (!analysisResponse.ok) {
+                    console.log('No writing analysis found (new user)');
+                    return;
+                }
                 const analysisData = await analysisResponse.json();
                 
                 // Load master resume
                 const masterResumeResponse = await fetch('/api/get-master-resume');
+                if (!masterResumeResponse.ok) {
+                    console.log('No master resume found (new user)');
+                    return;
+                }
                 const masterResumeData = await masterResumeResponse.json();
                 
                 // Safely extract data with fallbacks
@@ -252,7 +264,7 @@
                 
                 updateStoredDataStatus(coverLetters, analysis, masterResume);
             } catch (error) {
-                console.error('Error loading stored data:', error);
+                console.log('Error loading stored data (new user):', error.message);
                 // Don't show error to user for new users with no data
             }
         }

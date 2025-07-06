@@ -117,7 +117,7 @@ def init_database():
             """
             CREATE TABLE IF NOT EXISTS writing_analysis (
                 id SERIAL PRIMARY KEY,
-                user_id INTEGER REFERENCES users(id),
+                user_id INTEGER REFERENCES users(id) UNIQUE,
                 analysis TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -125,7 +125,7 @@ def init_database():
             """
             CREATE TABLE IF NOT EXISTS master_resume (
                 id SERIAL PRIMARY KEY,
-                user_id INTEGER REFERENCES users(id),
+                user_id INTEGER REFERENCES users(id) UNIQUE,
                 content TEXT,
                 filename VARCHAR(255),
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -167,7 +167,7 @@ def init_database():
             """
             CREATE TABLE IF NOT EXISTS writing_analysis (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                user_id INTEGER UNIQUE,
                 analysis TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id)
@@ -176,7 +176,7 @@ def init_database():
             """
             CREATE TABLE IF NOT EXISTS master_resume (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                user_id INTEGER UNIQUE,
                 content TEXT,
                 filename TEXT,
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
