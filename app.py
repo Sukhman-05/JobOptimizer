@@ -63,13 +63,19 @@ def init_db():
     conn.close()
 
 # Initialize database
-init_db()
+try:
+    init_db()
+    print("✅ Database initialized successfully")
+except Exception as e:
+    print(f"⚠️ Database initialization warning: {e}")
+    # Continue anyway - database will be created when needed
 
 # Load API key from environment variable only
 def get_openai_api_key():
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         print("Warning: OPENAI_API_KEY environment variable not set")
+        return None
     return api_key
 
 OPENAI_API_KEY = get_openai_api_key()
@@ -313,8 +319,12 @@ def generate_cover_letter(master_resume_content, job_description, writing_style,
 
 @app.route('/')
 def index():
-    user_id = get_or_create_user()
-    return render_template('index.html', user_id=user_id)
+    try:
+        user_id = get_or_create_user()
+        return render_template('index.html', user_id=user_id)
+    except Exception as e:
+        print(f"Error in index route: {e}")
+        return "Server error. Please check logs.", 500
 
 @app.route('/api/upload-cover-letters', methods=['POST'])
 def upload_cover_letters_api():
@@ -491,4 +501,15 @@ if __name__ == '__main__':
     app.run(debug=True)
 
 # For Vercel deployment
-app.debug = True 
+app.debug = True
+
+# Add error logging for Vercel
+@app.errorhandler(500)
+def internal_error(error):
+    print(f"500 Error: {error}")
+    return "Internal server error", 500
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    print(f"Unhandled exception: {e}")
+    return "Internal server error", 500 
