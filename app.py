@@ -42,6 +42,9 @@ def analyze_writing_style(cover_letters):
     if not cover_letters:
         return "No cover letters provided for analysis."
     
+    if not OPENAI_API_KEY:
+        return "Error: OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
+    
     combined_text = "\n\n".join(cover_letters)
     
     client = OpenAI(api_key=OPENAI_API_KEY)
@@ -69,6 +72,9 @@ def analyze_writing_style(cover_letters):
 
 def generate_optimized_resume(resume_content, job_description, writing_style, output_format="text"):
     """Generate optimized resume based on job description and writing style"""
+    
+    if not OPENAI_API_KEY:
+        return "Error: OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
     
     client = OpenAI(api_key=OPENAI_API_KEY)
     
@@ -142,6 +148,9 @@ def generate_optimized_resume(resume_content, job_description, writing_style, ou
 
 def generate_cover_letter(resume_content, job_description, writing_style, company_name="", job_title=""):
     """Generate cover letter based on resume, job description, and writing style"""
+    
+    if not OPENAI_API_KEY:
+        return "Error: OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
     
     client = OpenAI(api_key=OPENAI_API_KEY)
     
@@ -253,4 +262,7 @@ def extract_text_api():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True) 
+    app.run(debug=True)
+
+# For Vercel deployment
+app.debug = True 
