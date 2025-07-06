@@ -17,7 +17,6 @@ An intelligent resume optimization tool that learns your writing style from cove
 
 ### 🎨 **Multiple Output Formats**
 - **LaTeX**: Clean LaTeX code without preamble (token-efficient)
-- **PDF**: Direct PDF download with professional formatting
 - **Text**: Plain text version for easy editing
 
 ### 💼 **Job-Specific Tailoring**
@@ -43,42 +42,47 @@ An intelligent resume optimization tool that learns your writing style from cove
    ```
    OPENAI_API_KEY=your_openai_api_key_here
    ```
-
-4. **Install LaTeX (for PDF generation):**
-   - **macOS**: `brew install --cask mactex`
-   - **Ubuntu/Debian**: `sudo apt-get install texlive-xetex`
-   - **Windows**: Install MiKTeX or TeX Live
+   
+   Or add to `pyproject.toml`:
+   ```toml
+   [tool.resume-reviewer]
+   openai_api_key = "your_openai_api_key_here"
+   ```
 
 ## Usage
 
-### Step-by-Step Guide
+### Local Development
 
 1. **Start the application:**
    ```bash
-   streamlit run main.py
+   python app.py
    ```
 
-2. **Upload Cover Letters (Optional but Recommended):**
-   - Use the sidebar to upload multiple cover letters
+2. **Open your browser:**
+   Visit `http://localhost:5000`
+
+### Web Interface Guide
+
+1. **Upload Cover Letters (Optional but Recommended):**
+   - Use the file upload area to upload multiple cover letters
    - Click "Analyze Writing Style" to learn your writing patterns
    - This helps maintain your unique voice in generated resumes
 
-3. **Upload Your Resume:**
+2. **Upload Your Resume:**
    - Upload your current resume in PDF or TXT format
    - The system will extract and display the content
 
-4. **Add Job Description:**
+3. **Add Job Description:**
    - Paste the complete job description you're targeting
    - Include requirements, responsibilities, and qualifications
 
-5. **Choose Output Format:**
+4. **Choose Output Format:**
    - **LaTeX**: Returns clean LaTeX code (minimal tokens)
-   - **PDF**: Downloads compiled PDF file
    - **Text**: Plain text version
 
-6. **Generate Optimized Resume:**
-   - Click "Generate Optimized Resume"
-   - Review and download the results
+5. **Generate Optimized Resume:**
+   - Click "Generate Optimized Resume" or "Cover Letter"
+   - Review and copy the results
 
 ### Output Formats Explained
 
@@ -88,16 +92,30 @@ An intelligent resume optimization tool that learns your writing style from cove
 - Copy the code into your existing LaTeX document
 - Professional formatting with proper structure
 
-#### PDF Format
-- Direct PDF download
-- Professional formatting
-- Ready to use immediately
-- Requires LaTeX installation
-
 #### Text Format
 - Plain text version
 - Easy to copy and paste
 - Good for further editing
+
+## Deployment
+
+### Vercel Deployment (Recommended)
+
+1. **Push to GitHub:**
+   ```bash
+   git add .
+   git commit -m "Ready for deployment"
+   git push origin main
+   ```
+
+2. **Deploy to Vercel:**
+   - Go to [vercel.com](https://vercel.com)
+   - Click "New Project"
+   - Import your GitHub repository
+   - Add environment variable: `OPENAI_API_KEY`
+   - Deploy!
+
+3. **Your app will be live at:** `https://your-project-name.vercel.app`
 
 ## Technical Details
 
@@ -116,22 +134,15 @@ The system analyzes your cover letters to understand:
 4. **Content Generation**: Creates optimized, job-specific content
 5. **Formatting**: Structures content for the chosen output format
 
-### LaTeX Compilation
-- Uses XeLaTeX for modern font support
-- Professional resume template structure
-- One-page format with proper margins
-- Clean, readable output
-
 ## Requirements
 
 - Python 3.12+
 - OpenAI API key
-- LaTeX installation (for PDF output)
-- Streamlit for web interface
+- Flask for web interface
 
 ## Dependencies
 
-- `streamlit`: Web interface
+- `flask`: Web interface
 - `openai`: AI API integration
 - `PyPDF2`: PDF text extraction
 - `python-dotenv`: Environment variable management
@@ -147,11 +158,6 @@ The system analyzes your cover letters to understand:
 
 ## Troubleshooting
 
-### LaTeX Compilation Issues
-- Ensure LaTeX is properly installed
-- Try the LaTeX format first, then convert to PDF
-- Check system logs for compilation errors
-
 ### API Issues
 - Verify your OpenAI API key is valid
 - Check your API usage limits
@@ -162,6 +168,11 @@ The system analyzes your cover letters to understand:
 - Ensure files are not corrupted
 - Check file size limits
 
+### Deployment Issues
+- Check Vercel build logs for errors
+- Verify environment variables are set correctly
+- Ensure all dependencies are in `requirements.txt`
+
 ## Contributing
 
 Feel free to submit issues and enhancement requests!
@@ -169,4 +180,3 @@ Feel free to submit issues and enhancement requests!
 ## License
 
 [Add your license information here]
-# JobOptimizer
