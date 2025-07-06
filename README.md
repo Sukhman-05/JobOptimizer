@@ -4,15 +4,20 @@ An intelligent resume optimization tool that learns your writing style from cove
 
 ## Features
 
-### 🎯 **Writing Style Learning**
+### 🎯 **Persistent Writing Style Learning**
 - Upload multiple cover letters to teach the AI your unique writing style
+- **Automatic data persistence** - Your cover letters and writing analysis are saved permanently
+- **No re-uploading needed** - Data persists across sessions and browser restarts
+- **User sessions** - Each user gets their own secure data storage
 - Automatic analysis of tone, vocabulary, and personal voice
 - Maintains consistency across all generated content
 
-### 📄 **Smart Resume Optimization**
-- Analyzes your current resume and target job description
-- Generates optimized content that matches the job requirements
-- Focuses on relevant achievements and skills
+### 📄 **Master Resume System**
+- Upload your complete resume with ALL experiences once
+- AI intelligently edits and optimizes for each specific job
+- **No re-uploading needed** - Your master resume is stored permanently
+- **Smart editing** - Keeps relevant experiences, removes/minimizes irrelevant ones
+- **Token efficient** - Uses stored master resume instead of re-uploading
 - Includes keywords from the job description
 
 ### 🎨 **Multiple Output Formats**
@@ -63,24 +68,32 @@ An intelligent resume optimization tool that learns your writing style from cove
 
 ### Web Interface Guide
 
-1. **Upload Cover Letters (Optional but Recommended):**
+1. **Upload Master Resume (One-time setup):**
+   - Upload your complete resume with ALL your experiences
+   - **Your master resume is automatically saved** and will persist across sessions
+   - Include everything - the AI will intelligently edit for each job
+
+2. **Upload Cover Letters (One-time setup):**
    - Use the file upload area to upload multiple cover letters
+   - **Your cover letters are automatically saved** and will persist across sessions
    - Click "Analyze Writing Style" to learn your writing patterns
+   - **No need to re-upload** - Your data is stored securely
    - This helps maintain your unique voice in generated resumes
 
-2. **Upload Your Resume:**
-   - Upload your current resume in PDF or TXT format
-   - The system will extract and display the content
+3. **Generate Optimized Content:**
+   - Simply paste the job description
+   - The AI will automatically use your stored master resume and writing style
+   - Generate optimized resumes and cover letters instantly
 
-3. **Add Job Description:**
+4. **Add Job Description:**
    - Paste the complete job description you're targeting
    - Include requirements, responsibilities, and qualifications
 
-4. **Choose Output Format:**
+5. **Choose Output Format:**
    - **LaTeX**: Returns clean LaTeX code (minimal tokens)
    - **Text**: Plain text version
 
-5. **Generate Optimized Resume:**
+6. **Generate Optimized Content:**
    - Click "Generate Optimized Resume" or "Cover Letter"
    - Review and copy the results
 
@@ -120,6 +133,7 @@ The system analyzes your cover letters to understand:
 - Python 3.12+
 - OpenAI API key
 - Flask for web interface
+- SQLite (included with Python)
 
 ## Dependencies
 
@@ -127,7 +141,8 @@ The system analyzes your cover letters to understand:
 - `openai`: AI API integration
 - `PyPDF2`: PDF text extraction
 - `python-dotenv`: Environment variable management
-- `pathlib`: File path handling
+- `sqlite3`: Database storage (built-in)
+- `uuid`: User session management (built-in)
 
 ## Tips for Best Results
 

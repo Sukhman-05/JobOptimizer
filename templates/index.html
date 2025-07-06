@@ -73,6 +73,20 @@
             border-color: #667eea;
             background-color: #e3f2fd;
         }
+        .user-info {
+            background: #e3f2fd;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-left: 4px solid #2196f3;
+        }
+        .stored-data {
+            background: #f1f8e9;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-left: 4px solid #4caf50;
+        }
     </style>
 </head>
 <body>
@@ -85,12 +99,44 @@
                 <p class="lead text-muted">Upload your resume, job description, and cover letters to generate optimized resumes and cover letters</p>
             </div>
 
+            <!-- User Session Info -->
+            <div class="user-info">
+                <h5><i class="fas fa-user me-2"></i>Your Session</h5>
+                <p class="mb-0">Your data is automatically saved and will persist across sessions. No need to re-upload cover letters!</p>
+            </div>
+
+            <!-- Stored Data Status -->
+            <div class="stored-data" id="storedDataStatus" style="display: none;">
+                <h5><i class="fas fa-database me-2"></i>Stored Data</h5>
+                <div id="storedDataContent"></div>
+            </div>
+
             <div class="row">
+                <!-- Master Resume Section -->
+                <div class="col-md-6">
+                    <div class="section-card">
+                        <h3><i class="fas fa-file-alt me-2"></i>Master Resume</h3>
+                        <p class="text-muted">Upload your complete resume with all experiences (saved automatically)</p>
+                        
+                        <div class="file-upload-area" id="masterResumeUpload">
+                            <i class="fas fa-cloud-upload-alt fa-3x text-muted mb-3"></i>
+                            <h5>Upload Master Resume</h5>
+                            <p class="text-muted">PDF or TXT format - Include ALL your experiences</p>
+                            <input type="file" id="masterResumeInput" accept=".pdf,.txt" class="d-none">
+                            <button class="btn btn-outline-primary" onclick="document.getElementById('masterResumeInput').click()">
+                                Choose File
+                            </button>
+                        </div>
+                        
+                        <div id="masterResumeContent" class="mt-3"></div>
+                    </div>
+                </div>
+
                 <!-- Cover Letters Section -->
                 <div class="col-md-6">
                     <div class="section-card">
-                        <h3><i class="fas fa-envelope me-2"></i>Cover Letters (Optional)</h3>
-                        <p class="text-muted">Upload cover letters to learn your writing style</p>
+                        <h3><i class="fas fa-envelope me-2"></i>Cover Letters</h3>
+                        <p class="text-muted">Upload cover letters to learn your writing style (saved automatically)</p>
                         
                         <div class="file-upload-area" id="coverLetterUpload">
                             <i class="fas fa-cloud-upload-alt fa-3x text-muted mb-3"></i>
@@ -109,26 +155,6 @@
                         </button>
                         
                         <div id="writingStyleResult" class="result-box" style="display: none;"></div>
-                    </div>
-                </div>
-
-                <!-- Resume Upload Section -->
-                <div class="col-md-6">
-                    <div class="section-card">
-                        <h3><i class="fas fa-file-pdf me-2"></i>Resume Upload</h3>
-                        <p class="text-muted">Upload your current resume</p>
-                        
-                        <div class="file-upload-area" id="resumeUpload">
-                            <i class="fas fa-cloud-upload-alt fa-3x text-muted mb-3"></i>
-                            <h5>Upload Resume</h5>
-                            <p class="text-muted">PDF or TXT format</p>
-                            <input type="file" id="resumeInput" accept=".pdf,.txt" class="d-none">
-                            <button class="btn btn-outline-primary" onclick="document.getElementById('resumeInput').click()">
-                                Choose File
-                            </button>
-                        </div>
-                        
-                        <div id="resumeContent" class="mt-3"></div>
                     </div>
                 </div>
             </div>
@@ -181,59 +207,120 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        let coverLetters = [];
-        let resumeContent = '';
-        let writingStyleAnalysis = '';
+
+
+        // Load stored data on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadStoredData();
+        });
 
         // File upload handlers
         document.getElementById('coverLetterInput').addEventListener('change', handleCoverLetterUpload);
-        document.getElementById('resumeInput').addEventListener('change', handleResumeUpload);
+        document.getElementById('masterResumeInput').addEventListener('change', handleMasterResumeUpload);
 
-        function handleCoverLetterUpload(event) {
-            const files = event.target.files;
-            coverLetters = [];
-            
-            for (let file of files) {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    coverLetters.push(e.target.result);
-                    updateCoverLettersList();
-                };
-                reader.readAsText(file);
+        async function loadStoredData() {
+            try {
+                // Load cover letters
+                const coverLettersResponse = await fetch('/api/get-cover-letters');
+                const coverLettersData = await coverLettersResponse.json();
+                
+                // Load writing analysis
+                const analysisResponse = await fetch('/api/get-writing-analysis');
+                const analysisData = await analysisResponse.json();
+                
+                // Load master resume
+                const masterResumeResponse = await fetch('/api/get-master-resume');
+                const masterResumeData = await masterResumeResponse.json();
+                
+                updateStoredDataStatus(coverLettersData.cover_letters, analysisData.analysis, masterResumeData.master_resume);
+            } catch (error) {
+                console.error('Error loading stored data:', error);
             }
         }
 
-        function handleResumeUpload(event) {
+        function updateStoredDataStatus(coverLetters, analysis, masterResume) {
+            const statusDiv = document.getElementById('storedDataStatus');
+            const contentDiv = document.getElementById('storedDataContent');
+            
+            let content = '';
+            
+            if (masterResume) {
+                content += `<p><i class="fas fa-check text-success me-2"></i>Master resume stored</p>`;
+            }
+            
+            if (coverLetters && coverLetters.length > 0) {
+                content += `<p><i class="fas fa-check text-success me-2"></i>${coverLetters.length} cover letter(s) stored</p>`;
+            }
+            
+            if (analysis) {
+                content += `<p><i class="fas fa-check text-success me-2"></i>Writing style analysis available</p>`;
+            }
+            
+            if (content) {
+                contentDiv.innerHTML = content;
+                statusDiv.style.display = 'block';
+            }
+        }
+
+        async function handleCoverLetterUpload(event) {
+            const files = event.target.files;
+            if (files.length === 0) return;
+            
+            const formData = new FormData();
+            for (let file of files) {
+                formData.append('files', file);
+            }
+            
+            try {
+                const response = await fetch('/api/upload-cover-letters', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    alert('Error uploading files: ' + data.error);
+                } else {
+                    alert(data.message);
+                    loadStoredData(); // Refresh stored data status
+                }
+            } catch (error) {
+                alert('Error uploading files: ' + error.message);
+            }
+        }
+
+        async function handleMasterResumeUpload(event) {
             const file = event.target.files[0];
-            if (file) {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    resumeContent = e.target.result;
-                    document.getElementById('resumeContent').innerHTML = `
+            if (!file) return;
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            try {
+                const response = await fetch('/api/upload-master-resume', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    alert('Error uploading master resume: ' + data.error);
+                } else {
+                    document.getElementById('masterResumeContent').innerHTML = `
                         <div class="alert alert-success">
-                            <i class="fas fa-check me-2"></i>Resume uploaded successfully
+                            <i class="fas fa-check me-2"></i>${data.message}
                         </div>
                     `;
-                };
-                reader.readAsText(file);
+                    loadStoredData(); // Refresh stored data status
+                }
+            } catch (error) {
+                alert('Error uploading master resume: ' + error.message);
             }
-        }
-
-        function updateCoverLettersList() {
-            const list = document.getElementById('coverLettersList');
-            list.innerHTML = `
-                <div class="alert alert-info">
-                    <i class="fas fa-info-circle me-2"></i>${coverLetters.length} cover letter(s) uploaded
-                </div>
-            `;
         }
 
         async function analyzeWritingStyle() {
-            if (coverLetters.length === 0) {
-                alert('Please upload cover letters first');
-                return;
-            }
-
             showLoading();
             
             try {
@@ -241,8 +328,7 @@
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ cover_letters: coverLetters })
+                    }
                 });
 
                 const data = await response.json();
@@ -251,12 +337,13 @@
                     throw new Error(data.error);
                 }
 
-                writingStyleAnalysis = data.analysis;
                 document.getElementById('writingStyleResult').innerHTML = `
                     <h5><i class="fas fa-magic me-2"></i>Writing Style Analysis</h5>
                     <p>${data.analysis}</p>
                 `;
                 document.getElementById('writingStyleResult').style.display = 'block';
+                
+                loadStoredData(); // Refresh stored data status
             } catch (error) {
                 alert('Error analyzing writing style: ' + error.message);
             } finally {
@@ -265,8 +352,8 @@
         }
 
         async function generateResume() {
-            if (!resumeContent || !document.getElementById('jobDescription').value) {
-                alert('Please upload a resume and provide a job description');
+            if (!document.getElementById('jobDescription').value) {
+                alert('Please provide a job description');
                 return;
             }
 
@@ -279,9 +366,7 @@
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        resume_content: resumeContent,
                         job_description: document.getElementById('jobDescription').value,
-                        writing_style: writingStyleAnalysis,
                         output_format: document.getElementById('outputFormat').value
                     })
                 });
@@ -309,8 +394,8 @@
         }
 
         async function generateCoverLetter() {
-            if (!resumeContent || !document.getElementById('jobDescription').value) {
-                alert('Please upload a resume and provide a job description');
+            if (!document.getElementById('jobDescription').value) {
+                alert('Please provide a job description');
                 return;
             }
 
@@ -323,9 +408,7 @@
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        resume_content: resumeContent,
                         job_description: document.getElementById('jobDescription').value,
-                        writing_style: writingStyleAnalysis,
                         company_name: '',
                         job_title: ''
                     })
