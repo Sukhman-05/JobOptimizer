@@ -16,21 +16,12 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Load API key from pyproject.toml or environment variable
+# Load API key from environment variable only
 def get_openai_api_key():
-    # First try environment variable
     api_key = os.getenv("OPENAI_API_KEY")
-    if api_key:
-        return api_key
-    
-    # Fallback to pyproject.toml
-    try:
-        with open("pyproject.toml", "rb") as f:
-            config = tomllib.load(f)
-            return config.get("tool", {}).get("resume-reviewer", {}).get("openai_api_key")
-    except Exception as e:
-        print(f"Error loading API key from pyproject.toml: {e}")
-        return None
+    if not api_key:
+        print("Warning: OPENAI_API_KEY environment variable not set")
+    return api_key
 
 OPENAI_API_KEY = get_openai_api_key()
 
